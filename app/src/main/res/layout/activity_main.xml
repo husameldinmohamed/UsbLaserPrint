@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:layoutDirection="rtl">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- Printer -->
+        <TextView style="@style/Section" android:text="الطابعة" />
+        <TextView
+            android:id="@+id/printerStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="جاري البحث…"
+            android:textSize="15sp" />
+        <Button
+            android:id="@+id/btnRefresh"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="تحديث الاتصال" />
+
+        <!-- File -->
+        <TextView style="@style/Section" android:text="الملف" />
+        <Button
+            android:id="@+id/btnPick"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="اختار ملف PDF أو صورة" />
+        <TextView
+            android:id="@+id/fileInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="مفيش ملف"
+            android:textSize="14sp" />
+        <ImageView
+            android:id="@+id/thumb"
+            android:layout_width="160dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:adjustViewBounds="true"
+            android:background="#DDDDDD"
+            android:padding="1dp"
+            android:visibility="gone"
+            android:layout_marginTop="8dp" />
+
+        <!-- Pages -->
+        <TextView style="@style/Section" android:text="الصفحات" />
+        <EditText
+            android:id="@+id/pages"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="فاضي = كل الصفحات  •  مثال: 1-3, 5, 8"
+            android:inputType="text"
+            android:textDirection="ltr" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="عدد النسخ:  " />
+            <EditText
+                android:id="@+id/copies"
+                android:layout_width="80dp"
+                android:layout_height="wrap_content"
+                android:inputType="number"
+                android:text="1"
+                android:textDirection="ltr" />
+        </LinearLayout>
+
+        <!-- Sides -->
+        <TextView style="@style/Section" android:text="نوع الطباعة" />
+        <RadioGroup
+            android:id="@+id/sides"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+            <RadioButton
+                android:id="@+id/simplex"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="وش واحد" />
+            <RadioButton
+                android:id="@+id/duplex"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="وش وضهر (يدوي)" />
+        </RadioGroup>
+        <LinearLayout
+            android:id="@+id/duplexOptions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="24dp"
+            android:visibility="gone">
+            <CheckBox
+                android:id="@+id/reverseBacks"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="اطبع الضهر بترتيب عكسي" />
+            <CheckBox
+                android:id="@+id/rotateBacks"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="لف الضهر 180°" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="جرّب الأول على ورقتين، ولو الضهر طلع مقلوب أو بترتيب غلط غيّر الاختيارات دي."
+                android:textColor="#777777"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- Settings -->
+        <TextView style="@style/Section" android:text="الإعدادات" />
+        <TextView style="@style/Label" android:text="مقاس الورق" />
+        <Spinner android:id="@+id/paper" style="@style/Field" />
+        <TextView style="@style/Label" android:text="الجودة" />
+        <Spinner android:id="@+id/quality" style="@style/Field" />
+        <TextView style="@style/Label" android:text="نوع المحتوى" />
+        <Spinner android:id="@+id/mode" style="@style/Field" />
+        <TextView style="@style/Label" android:text="غمق الحبر" />
+        <Spinner android:id="@+id/density" style="@style/Field" />
+        <CheckBox
+            android:id="@+id/tonerSave"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="توفير الحبر" />
+
+        <!-- Action -->
+        <Button
+            android:id="@+id/btnPrint"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_marginTop="16dp"
+            android:text="اطبع"
+            android:textSize="20sp" />
+        <ProgressBar
+            android:id="@+id/progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone" />
+        <TextView
+            android:id="@+id/jobStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textSize="15sp" />
+
+        <!-- Diagnostics -->
+        <TextView style="@style/Section" android:text="تشخيص" />
+        <Button
+            android:id="@+id/btnRaw"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="ابعت ملف PRN للطابعة زي ما هو" />
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Any USB printer-class device (class 7) -->
+    <usb-device class="7" />
+    <!-- HP vendor id (0x03F0) -->
+    <usb-device vendor-id="1008" />
+</resources>
