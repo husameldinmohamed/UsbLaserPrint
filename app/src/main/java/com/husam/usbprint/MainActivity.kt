@@ -84,6 +84,7 @@ class MainActivity : Activity() {
     companion object {
         private const val REQ_PICK = 1
         private const val REQ_RAW = 2
+        private const val REQ_SAVE = 3
         private const val PREFS = "settings"
     }
 
@@ -132,6 +133,8 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.btnRefresh).setOnClickListener { refreshPrinter() }
         findViewById<Button>(R.id.btnPick).setOnClickListener { pickFile(REQ_PICK, arrayOf("application/pdf", "image/*")) }
         findViewById<Button>(R.id.btnRaw).setOnClickListener { pickFile(REQ_RAW, arrayOf("*/*")) }
+        findViewById<Button>(R.id.btnTest).setOnClickListener { printTestPage() }
+        findViewById<Button>(R.id.btnSave).setOnClickListener { startSaveJob() }
         btnPrint.setOnClickListener { startPrint() }
 
         handleIntent(intent)
@@ -226,6 +229,7 @@ class MainActivity : Activity() {
                     printerStatus.text = buildString {
                         append("✅ متوصلة: ").append(model)
                         if (cmd != null) append("\nاللغات: ").append(cmd)
+                        append("\nUSB: interface ${info.iface.id} / protocol ${info.iface.interfaceProtocol}")
                         if (cmd != null && !cmd.contains("SPL", true) && !cmd.contains("QPDL", true))
                             append("\n⚠️ الطابعة دي مش بتعلن دعم SPL، التطبيق معمول لـ HP Laser MFP 13x")
                     }
@@ -278,6 +282,7 @@ class MainActivity : Activity() {
         when (requestCode) {
             REQ_PICK -> loadDocument(uri, contentResolver.getType(uri))
             REQ_RAW -> sendRaw(uri)
+            REQ_SAVE -> finishSaveJob(uri)
         }
     }
 
@@ -486,7 +491,11 @@ class MainActivity : Activity() {
             .show()
     }
 
-    /** Render, encode and send a list of pages (null = blank sheet) as one printer job. */
+    /**
+     * Render and encode every page to a file first, then stream the whole job to the
+     * printer in one go. Sending the PJL header and then pausing to render pages can
+     * make the printer time out and print the rest as garbage text.
+     */
     private fun runJob(
         p: PrinterInfo, d: DocumentSource, opt: JobOptions, mode: ColorMode,
         pages: List<Int?>, rotate180: Boolean, label: String, onDone: () -> Unit,
@@ -495,22 +504,149 @@ class MainActivity : Activity() {
         ui { progress.max = pages.size; progress.progress = 0; jobStatus.text = "${label}بيجهّز…" }
         worker.execute {
             try {
-                val enc = QpdlEncoder(opt)
-                UsbPrinterConnection.open(usb, p).use { conn ->
-                    conn.write(enc.jobHeader())
-                    pages.forEachIndexed { i, pg ->
-                        ui { jobStatus.text = "${label}بيطبع ${i + 1} من ${pages.size}" + (pg?.let { " (صفحة $it)" } ?: " (ضهر فاضي)") }
-                        val bmp = if (pg == null) blankPage(opt)
-                        else d.rasterize(pg - 1, opt.paper, opt.dpi, mode, rotate180)
-                        conn.write(enc.encodePage(bmp))
-                        ui { progress.progress = i + 1 }
-                    }
-                    conn.write(enc.jobFooter())
-                }
+                val job = buildJob(d, opt, mode, pages, rotate180, label)
+                sendJobFile(p, job, label)
                 setBusy(false)
                 onDone()
             } catch (e: Throwable) {
                 setBusy(false)
+                showError(e.message ?: e.toString())
+            }
+        }
+    }
+
+    /** Must run on the worker thread. Writes the complete printer job to cache/job.prn. */
+    private fun buildJob(
+        d: DocumentSource?, opt: JobOptions, mode: ColorMode,
+        pages: List<Int?>, rotate180: Boolean, label: String,
+        pageProvider: ((Int?) -> PageBitmap)? = null,
+    ): java.io.File {
+        val file = java.io.File(cacheDir, "job.prn")
+        val enc = QpdlEncoder(opt)
+        java.io.BufferedOutputStream(file.outputStream(), 256 * 1024).use { out ->
+            out.write(enc.jobHeader())
+            pages.forEachIndexed { i, pg ->
+                ui {
+                    progress.max = pages.size; progress.progress = i
+                    jobStatus.text = "${label}بيجهّز ${i + 1} من ${pages.size}" + (pg?.let { " (صفحة $it)" } ?: " (ضهر فاضي)")
+                }
+                val bmp = when {
+                    pageProvider != null -> pageProvider(pg)
+                    pg == null || d == null -> blankPage(opt)
+                    else -> d.rasterize(pg - 1, opt.paper, opt.dpi, mode, rotate180)
+                }
+                out.write(enc.encodePage(bmp))
+            }
+            out.write(enc.jobFooter())
+        }
+        return file
+    }
+
+    /** Must run on the worker thread. Streams a finished job file to the printer. */
+    private fun sendJobFile(p: PrinterInfo, file: java.io.File, label: String) {
+        val data = file.readBytes()
+        ui { progress.max = 100; progress.progress = 0; jobStatus.text = "${label}بيبعت للطابعة…" }
+        UsbPrinterConnection.open(usb, p).use { conn ->
+            val step = 64 * 1024
+            var off = 0
+            while (off < data.size) {
+                val n = minOf(step, data.size - off)
+                conn.write(data, off, n)
+                off += n
+                val pct = (off * 100L / data.size).toInt()
+                ui { progress.progress = pct; jobStatus.text = "${label}بيبعت للطابعة $pct%" }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ Diagnostics
+
+    /** Print a built-in test page (no file needed): border, boxes, lines and a grey ramp. */
+    private fun printTestPage() {
+        if (busy) return
+        val p = printer ?: return showError("الطابعة مش متوصلة")
+        if (!usb.hasPermission(p.device)) { refreshPrinter(); return }
+        val opt = currentOptions().copy(jobName = "test page")
+        setBusy(true)
+        worker.execute {
+            try {
+                val job = buildJob(null, opt, ColorMode.TEXT, listOf(1), false, "صفحة اختبار: ") { testPage(opt) }
+                sendJobFile(p, job, "صفحة اختبار: ")
+                ui { jobStatus.text = "✅ اتبعتت صفحة الاختبار" }
+            } catch (e: Throwable) {
+                showError(e.message ?: e.toString())
+            } finally {
+                setBusy(false)
+            }
+        }
+    }
+
+    private fun testPage(opt: JobOptions): PageBitmap {
+        val w = opt.paper.pixelWidth(opt.dpi)
+        val h = opt.paper.pixelHeight(opt.dpi)
+        val rb = w / 8
+        val d = ByteArray(rb * h)
+        val u = opt.dpi / 600f
+        fun set(x: Int, y: Int) { if (x in 0 until w && y in 0 until h) { val i = y * rb + (x ushr 3); d[i] = (d[i].toInt() or (0x80 ushr (x and 7))).toByte() } }
+        fun rect(x0: Int, y0: Int, x1: Int, y1: Int) { for (y in y0 until y1) for (x in x0 until x1) set(x, y) }
+        val m = (200 * u).toInt(); val t = (12 * u).toInt()
+        rect(m, m, w - m, m + t); rect(m, h - m - t, w - m, h - m)          // border
+        rect(m, m, m + t, h - m); rect(w - m - t, m, w - m, h - m)
+        for (k in 0 until 8) {                                             // boxes
+            val s = ((60 + k * 40) * u).toInt(); val x = m + (150 * u).toInt() + k * (500 * u).toInt()
+            rect(x, m + (300 * u).toInt(), minOf(x + s, w - m - t), m + (300 * u).toInt() + s)
+        }
+        for (k in 0 until 40) {                                            // horizontal lines
+            val y = (h * 0.35).toInt() + k * (40 * u).toInt()
+            rect(m + (150 * u).toInt(), y, w - m - (150 * u).toInt(), y + 1 + k / 10)
+        }
+        val gy = (h * 0.65).toInt(); val gh = (600 * u).toInt()              // grey ramp (dither)
+        val bayer = intArrayOf(0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21)
+        val x0 = m + (150 * u).toInt(); val x1 = w - m - (150 * u).toInt()
+        for (y in gy until gy + gh) for (x in x0 until x1) {
+            val g = (x - x0) * 64 / (x1 - x0)
+            if (g > bayer[(y and 7) * 8 + (x and 7)]) set(x, y)
+        }
+        return PageBitmap(w, h, d)
+    }
+
+    /** Save the job file that would be sent to the printer, for troubleshooting. */
+    private fun startSaveJob() {
+        if (busy) return
+        val d = doc ?: return showError("اختار ملف الأول")
+        val pages = try { PageRange.parse(pagesEdit.text.toString(), d.pageCount) }
+        catch (e: IllegalArgumentException) { return showError(e.message ?: "الصفحات غلط") }
+        val opt = currentOptions()
+        val mode = if (modeSpin.selectedItemPosition == 1) ColorMode.PHOTO else ColorMode.TEXT
+        setBusy(true)
+        worker.execute {
+            try {
+                buildJob(d, opt, mode, pages, false, "حفظ: ")
+                ui {
+                    setBusy(false)
+                    val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "application/octet-stream"
+                        putExtra(Intent.EXTRA_TITLE, "usbprint-job.prn")
+                    }
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(i, REQ_SAVE)
+                }
+            } catch (e: Throwable) {
+                setBusy(false)
+                showError(e.message ?: e.toString())
+            }
+        }
+    }
+
+    private fun finishSaveJob(uri: Uri) {
+        worker.execute {
+            try {
+                contentResolver.openOutputStream(uri)!!.use { out ->
+                    java.io.File(cacheDir, "job.prn").inputStream().use { it.copyTo(out) }
+                }
+                ui { jobStatus.text = "✅ اتحفظ ملف الطباعة" }
+            } catch (e: Throwable) {
                 showError(e.message ?: e.toString())
             }
         }

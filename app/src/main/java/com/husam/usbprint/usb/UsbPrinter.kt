@@ -26,7 +26,13 @@ data class PrinterInfo(
 object UsbPrinterFinder {
     const val ACTION_USB_PERMISSION = "com.husam.usbprint.USB_PERMISSION"
 
+    /**
+     * Find a printer-class interface with a bulk OUT endpoint. Raw-data interfaces
+     * (protocol 1 = unidirectional, 2 = bidirectional) are preferred; protocol 4 is
+     * IPP-over-USB (AirPrint) and must not receive raw QPDL data.
+     */
     fun find(usb: UsbManager): PrinterInfo? {
+        val candidates = ArrayList<PrinterInfo>()
         for (dev in usb.deviceList.values) {
             for (i in 0 until dev.interfaceCount) {
                 val itf = dev.getInterface(i)
@@ -38,10 +44,13 @@ object UsbPrinterFinder {
                     if (ep.type != UsbConstants.USB_ENDPOINT_XFER_BULK) continue
                     if (ep.direction == UsbConstants.USB_DIR_OUT) out = ep else inp = ep
                 }
-                if (out != null) return PrinterInfo(dev, itf, out, inp)
+                if (out != null) candidates.add(PrinterInfo(dev, itf, out, inp))
             }
         }
-        return null
+        fun rank(p: PrinterInfo) = when (p.iface.interfaceProtocol) {
+            2 -> 0; 1 -> 1; 3 -> 2; 4 -> 9; else -> 5
+        }
+        return candidates.minByOrNull { rank(it) }
     }
 
     fun requestPermission(ctx: Context, usb: UsbManager, dev: UsbDevice, onResult: (Boolean) -> Unit) {
@@ -94,21 +103,27 @@ class UsbPrinterConnection private constructor(
         return String(buf, 2, len - 2, Charsets.ISO_8859_1).trim()
     }
 
-    /** Write all bytes, retrying partial/timeout transfers while the printer is busy. */
-    fun write(data: ByteArray) {
-        var off = 0
-        var stalls = 0
-        val chunk = 16 * 1024
-        while (off < data.size) {
-            val len = minOf(chunk, data.size - off)
-            val piece = data.copyOfRange(off, off + len)
-            val n = conn.bulkTransfer(info.outEp, piece, len, 20000)
+    /**
+     * Write all bytes. Data is sent one USB packet at a time, so a timeout means
+     * that packet was not accepted and can be retried safely (no duplicated data).
+     */
+    fun write(data: ByteArray, off0: Int = 0, len0: Int = data.size - off0) {
+        val pkt = maxOf(64, info.outEp.maxPacketSize)
+        val chunkSize = pkt * 32            // whole packets, retried only on full failure
+        var off = off0
+        val end = off0 + len0
+        var waitedMs = 0L
+        val buf = ByteArray(chunkSize)
+        while (off < end) {
+            val len = minOf(chunkSize, end - off)
+            System.arraycopy(data, off, buf, 0, len)
+            val n = conn.bulkTransfer(info.outEp, buf, len, 0)   // 0 = wait until accepted
             if (n > 0) {
                 off += n
-                stalls = 0
+                waitedMs = 0
             } else {
-                stalls++
-                if (stalls > 15) throw IOException("الطابعة مش بتستقبل بيانات (اتأكد إنها شغالة وفيها ورق)")
+                waitedMs += 500
+                if (waitedMs > 60_000) throw IOException("الطابعة مش بتستقبل بيانات (اتأكد إنها شغالة وفيها ورق)")
                 Thread.sleep(500)
             }
         }

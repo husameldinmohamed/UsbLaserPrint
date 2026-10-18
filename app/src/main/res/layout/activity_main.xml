@@ -182,6 +182,16 @@
         <!-- Diagnostics -->
         <TextView style="@style/Section" android:text="تشخيص" />
         <Button
+            android:id="@+id/btnTest"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="اطبع صفحة اختبار" />
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="احفظ ملف الطباعة (للتشخيص)" />
+        <Button
             android:id="@+id/btnRaw"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

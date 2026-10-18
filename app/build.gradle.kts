@@ -11,8 +11,8 @@ android {
         applicationId = "com.husam.usbprint"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     // Fixed signing key kept in the repo so every CI build can update the installed app.
