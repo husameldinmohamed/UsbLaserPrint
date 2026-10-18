@@ -11,14 +11,24 @@ android {
         applicationId = "com.husam.usbprint"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    // Fixed signing key kept in the repo so every CI build can update the installed app.
+    signingConfigs {
+        create("fixed") {
+            storeFile = file("usbprint.keystore")
+            storePassword = "usbprint123"
+            keyAlias = "usbprint"
+            keyPassword = "usbprint123"
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("fixed")
         }
     }
     compileOptions {

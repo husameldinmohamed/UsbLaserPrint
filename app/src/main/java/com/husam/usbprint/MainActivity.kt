@@ -4,6 +4,14 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.os.Handler
+import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.Gravity
+import android.widget.LinearLayout
 import android.hardware.usb.UsbManager
 import android.net.Uri
 import android.os.Build
@@ -11,7 +19,6 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.View
 import android.view.WindowManager
-import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -63,6 +70,14 @@ class MainActivity : Activity() {
     private lateinit var btnPrint: Button
     private lateinit var progress: ProgressBar
     private lateinit var jobStatus: TextView
+    private lateinit var previewLabel: TextView
+    private lateinit var previewScroll: View
+    private lateinit var previewStrip: LinearLayout
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val thumbCache = HashMap<Int, Bitmap>()   // accessed on worker thread only
+    private var previewGen = 0
+    private val previewRunnable = Runnable { updatePreview() }
 
     private val papers = PaperSize.values()
 
@@ -94,6 +109,15 @@ class MainActivity : Activity() {
         btnPrint = findViewById(R.id.btnPrint)
         progress = findViewById(R.id.progress)
         jobStatus = findViewById(R.id.jobStatus)
+        previewLabel = findViewById(R.id.previewLabel)
+        previewScroll = findViewById(R.id.previewScroll)
+        previewStrip = findViewById(R.id.previewStrip)
+
+        pagesEdit.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) { schedulePreview() }
+        })
 
         paperSpin.adapter = spinnerAdapter(papers.map { it.label })
         qualitySpin.adapter = spinnerAdapter(listOf("عادية 600 DPI", "عالية 1200 DPI (أبطأ)"))
@@ -103,6 +127,7 @@ class MainActivity : Activity() {
 
         findViewById<android.widget.RadioGroup>(R.id.sides).setOnCheckedChangeListener { _, _ ->
             duplexOptions.visibility = if (duplexRadio.isChecked) View.VISIBLE else View.GONE
+            schedulePreview()
         }
         findViewById<Button>(R.id.btnRefresh).setOnClickListener { refreshPrinter() }
         findViewById<Button>(R.id.btnPick).setOnClickListener { pickFile(REQ_PICK, arrayOf("application/pdf", "image/*")) }
@@ -273,6 +298,8 @@ class MainActivity : Activity() {
             try {
                 doc?.close()
                 doc = null
+                thumbCache.values.forEach { it.recycle() }
+                thumbCache.clear()
                 val d = DocumentSource.open(this, uri, mime)
                 doc = d
                 docName = name.substringBeforeLast('.')
@@ -282,10 +309,118 @@ class MainActivity : Activity() {
                     thumb.setImageBitmap(bmp)
                     thumb.visibility = View.VISIBLE
                     pagesEdit.setText("")
+                    schedulePreview()
                 }
             } catch (e: Exception) {
                 ui { fileInfo.text = "مفيش ملف"; thumb.visibility = View.GONE }
                 showError("مقدرتش أفتح الملف: ${e.message}")
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ Preview
+
+    private fun schedulePreview() {
+        mainHandler.removeCallbacks(previewRunnable)
+        mainHandler.postDelayed(previewRunnable, 400)
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    /** Show thumbnails of the selected pages (in duplex mode: labelled front/back per sheet). */
+    private fun updatePreview() {
+        val d = doc
+        if (d == null) {
+            previewLabel.visibility = View.GONE
+            previewScroll.visibility = View.GONE
+            return
+        }
+        val pages = try {
+            PageRange.parse(pagesEdit.text.toString(), d.pageCount)
+        } catch (e: IllegalArgumentException) {
+            previewLabel.visibility = View.VISIBLE
+            previewLabel.setTextColor(Color.rgb(198, 40, 40))
+            previewLabel.text = "⚠️ ${e.message}"
+            previewScroll.visibility = View.GONE
+            return
+        }
+        val duplex = duplexRadio.isChecked
+        val sheets = if (duplex) (pages.size + 1) / 2 else pages.size
+        previewLabel.visibility = View.VISIBLE
+        previewLabel.setTextColor(Color.rgb(90, 90, 90))
+        previewLabel.text = if (duplex) "${pages.size} صفحة على $sheets ورقة (وش وضهر)"
+                            else "${pages.size} صفحة على $sheets ورقة"
+
+        val maxShown = 40
+        val shown = pages.take(maxShown)
+        val gen = ++previewGen
+        val thumbW = dp(78)
+        worker.execute {
+            val bmps = shown.map { pg ->
+                thumbCache.getOrPut(pg) { d.thumbnail(pg - 1, thumbW) }
+            }
+            ui {
+                if (gen != previewGen || doc !== d) return@ui
+                previewStrip.removeAllViews()
+                shown.forEachIndexed { i, pg ->
+                    val cap = if (duplex) "ورقة ${i / 2 + 1}\n${if (i % 2 == 0) "وش" else "ضهر"} • ص $pg" else "صفحة $pg"
+                    previewStrip.addView(thumbView(bmps[i], cap, pg, d))
+                }
+                if (pages.size > maxShown) {
+                    previewStrip.addView(TextView(this).apply {
+                        text = "+${pages.size - maxShown}"
+                        gravity = Gravity.CENTER
+                        setPadding(dp(12), 0, dp(12), 0)
+                    })
+                }
+                previewScroll.visibility = View.VISIBLE
+            }
+        }
+    }
+
+    private fun thumbView(bmp: Bitmap, caption: String, page: Int, d: DocumentSource): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        val img = ImageView(this).apply {
+            setImageBitmap(bmp)
+            adjustViewBounds = true
+            setBackgroundColor(Color.rgb(200, 200, 200))
+            setPadding(1, 1, 1, 1)
+            layoutParams = LinearLayout.LayoutParams(dp(80), LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+        val tv = TextView(this).apply {
+            text = caption
+            textSize = 11f
+            gravity = Gravity.CENTER
+        }
+        box.addView(img)
+        box.addView(tv)
+        box.setOnClickListener { showLargePreview(page, d) }
+        return box
+    }
+
+    /** Tap a thumbnail to see the page bigger. */
+    private fun showLargePreview(page: Int, d: DocumentSource) {
+        val w = resources.displayMetrics.widthPixels
+        worker.execute {
+            val bmp = try { d.thumbnail(page - 1, w) } catch (e: Exception) { null } ?: return@execute
+            ui {
+                if (doc !== d) return@ui
+                val img = ImageView(this).apply {
+                    setImageBitmap(bmp)
+                    adjustViewBounds = true
+                    setBackgroundColor(Color.WHITE)
+                }
+                val scroll = android.widget.ScrollView(this).apply { addView(img) }
+                AlertDialog.Builder(this)
+                    .setTitle("صفحة $page من ${d.pageCount}")
+                    .setView(scroll)
+                    .setPositiveButton("قفل", null)
+                    .setOnDismissListener { bmp.recycle() }
+                    .show()
             }
         }
     }
